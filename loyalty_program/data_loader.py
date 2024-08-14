@@ -24,6 +24,11 @@ class DataLoader:
         self.split_data(split_ratio)
         self.user_dataframe = pd.DataFrame(self.training_data["contact_key"].unique())  # type: ignore
         self.user_dataframe.columns = ["contact_key"]
+        self.construct_labels()
+        self.construct_classification_targets()
+
+    def group_transactions_per_week(self) -> None:
+        self.data.groupby(["contact_key", "date_key"])
 
     def split_data(self, split_ratio: float) -> None:
         if split_ratio <= 0.0 or split_ratio >= 1.0:
@@ -40,6 +45,40 @@ class DataLoader:
         self.validatation_data = self.data[
             self.data["date_key"] >= cutoff_date
         ].reset_index(drop=True)
+
+    def construct_labels(self) -> None:
+        val_first_purchase = (
+            self.validatation_data.groupby("contact_key")["date_key"]
+            .min()
+            .reset_index()
+        )
+        val_first_purchase.columns = ["contact_key", "first_purchase_date"]
+        train_last_purchase = (
+            self.training_data.groupby("contact_key")["date_key"].max().reset_index()
+        )
+        train_last_purchase.columns = ["contact_key", "last_purchase_date"]
+
+        purchase_dates = pd.merge(
+            train_last_purchase, val_first_purchase, on="contact_key", how="left"
+        )
+        purchase_dates["next_purchase_day"] = (
+            purchase_dates["first_purchase_date"] - purchase_dates["last_purchase_date"]
+        ).dt.days
+        self.user_dataframe = pd.merge(
+            self.user_dataframe,
+            purchase_dates[["contact_key", "next_purchase_day"]],
+            on="contact_key",
+            how="left",
+        )
+        self.user_dataframe = self.user_dataframe.fillna(9999)
+        print(self.user_dataframe.head())
+
+    def construct_classification_targets(self) -> None:
+        self.class_targets = self.user_dataframe.copy()
+        self.class_targets["purchase_next_week"] = 0
+        self.class_targets.loc[
+            self.class_targets["next_purchase_day"] <= 7, "purchase_next_week"
+        ] = 1
 
     def extend_features(self) -> None:
         self.data["total_quantity"] = (
